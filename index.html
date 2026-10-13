@@ -32,15 +32,15 @@ body{background:var(--night);color:var(--ink);font-family:var(--f-ui);font-size:
 button,input,textarea,select{font:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 
-.app{height:100%;display:grid;grid-template-columns:minmax(0,1fr) 380px}
+.app{height:100%;display:grid;grid-template-columns:minmax(0,1fr) 380px;grid-template-rows:minmax(0,1fr)}
 
 /* ── 채팅 ── */
-.chat{display:flex;flex-direction:column;min-width:0;height:100%;
+.chat{display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;overflow:hidden;
   background:
     radial-gradient(120% 70% at 50% 115%, rgba(217,118,63,.13), transparent 60%),
     radial-gradient(80% 60% at 50% -10%, rgba(201,163,90,.06), transparent 70%),
     var(--night)}
-.chat-head{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);
+.chat-head{flex:none;display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);
   background:rgba(15,12,16,.85);backdrop-filter:blur(6px)}
 .chat-head .who{flex:1;min-width:0}
 .chat-head .name{font-family:var(--f-display);font-size:17px;letter-spacing:.06em;color:var(--gold);
@@ -57,7 +57,7 @@ button,input,textarea,select{font:inherit;color:inherit}
   font-family:var(--f-display);color:var(--gold);font-size:17px;overflow:hidden}
 .avatar img{width:100%;height:100%;object-fit:cover}
 
-.log{flex:1;overflow-y:auto;padding:18px 16px 8px;display:flex;flex-direction:column;gap:3px}
+.log{flex:1 1 0;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:18px 16px 8px;display:flex;flex-direction:column;gap:3px}
 .day{align-self:center;margin:14px 0 10px;font-size:12px;color:var(--ink-mute);padding:4px 14px;
   border:1px solid var(--line);border-radius:999px;background:rgba(24,19,26,.7)}
 .row{display:flex;gap:9px;align-items:flex-start;max-width:100%}
@@ -95,7 +95,7 @@ button,input,textarea,select{font:inherit;color:inherit}
 .empty h2{font-family:var(--f-body);font-weight:600;color:var(--ink);font-size:19px;margin:0 0 8px;text-wrap:balance}
 .empty code{font-family:var(--f-ui);color:var(--gold);background:var(--hide-2);padding:1px 6px;border-radius:4px}
 
-.composer{display:flex;gap:8px;align-items:flex-end;padding:10px 16px calc(12px + env(safe-area-inset-bottom,0px));
+.composer{flex:none;display:flex;gap:8px;align-items:flex-end;padding:10px 16px calc(12px + env(safe-area-inset-bottom,0px));
   border-top:1px solid var(--line);background:var(--hide)}
 .composer textarea{flex:1;min-width:0;resize:none;border:1px solid var(--line);background:var(--night);border-radius:12px;
   padding:10px 13px;line-height:1.5;max-height:140px;font-family:var(--f-body);font-size:15px}
@@ -287,7 +287,7 @@ button,input,textarea,select{font:inherit;color:inherit}
 <script>
 (() => {
   const KEY_S = "bg3rp.settings.v1", KEY_M = "bg3rp.messages.v1";
-  const HISTORY_LIMIT = 40; // API로 보내는 최근 메시지 수
+  const HISTORY_LIMIT = 20; // API로 보내는 최근 메시지 수
   const $ = id => document.getElementById(id);
 
   const load = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
@@ -456,13 +456,14 @@ button,input,textarea,select{font:inherit;color:inherit}
     return m || "gemini-3.5-flash-lite";
   }
 
+  const noMinimal = new Set();
   async function askGemini(){
     const key = S.apiKey.trim(), model = normModel(S.model);
     if (!key) throw new Error("오른쪽 일지의 Gemini 칸에 API 키를 먼저 넣어주세요.");
     if (!/^[a-z0-9][a-z0-9.\-]*$/.test(model)) throw new Error(`모델 이름 "${S.model}"을(를) 알아볼 수 없어요. gemini-3.5-flash-lite 처럼 영문 소문자로 적어주세요.`);
     const gen = { temperature:1.0, maxOutputTokens: S.length === "long" ? 4096 : 2048 };
     if (/2\.5-flash/.test(model)) gen.thinkingConfig = { thinkingBudget:0 };       // 빠른 응답
-    else if (/^gemini-3/.test(model)) gen.thinkingConfig = { thinkingLevel:"low" }; // 생각 최소화
+    else if (/^gemini-3/.test(model)) gen.thinkingConfig = { thinkingLevel: noMinimal.has(model) ? "low" : "minimal" }; // 생각 최소화
     // 조절 가능한 안전 필터는 전부 끔
     const safety = ["HARM_CATEGORY_HARASSMENT","HARM_CATEGORY_HATE_SPEECH","HARM_CATEGORY_SEXUALLY_EXPLICIT","HARM_CATEGORY_DANGEROUS_CONTENT","HARM_CATEGORY_CIVIC_INTEGRITY"]
       .map(category => ({ category, threshold:"OFF" }));
@@ -472,6 +473,10 @@ button,input,textarea,select{font:inherit;color:inherit}
       body: JSON.stringify({ systemInstruction:{ parts:[{ text:systemPrompt() }] }, contents:buildContents(), generationConfig:gen, safetySettings:safety })
     });
     let data = {}; try { data = await res.json(); } catch {}
+    // minimal을 지원하지 않는 모델이면 low로 한 번 더
+    if (res.status === 400 && gen.thinkingConfig?.thinkingLevel === "minimal" && /think/i.test(data?.error?.message || "")){
+      noMinimal.add(model); return askGemini();
+    }
     if (!res.ok){
       const msg = data?.error?.message || res.statusText;
       if (res.status === 429) throw new Error("무료 사용량 한도에 걸렸어요. 1분쯤 쉬었다가 보내거나, 모델을 다른 걸로 바꿔보세요.");
